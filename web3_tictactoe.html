@@ -5,16 +5,20 @@
     <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.5/babel.min.js"></script>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script src="https://unpkg.com/@tonconnect/sdk@latest"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body>
     <div id="root" class="flex justify-center items-center h-screen bg-gray-100"></div>
     <script type="text/babel">
+        const tonConnect = new TONConnect.SDK();
         function TicTacToe() {
             const [board, setBoard] = React.useState(Array(9).fill(" "));
             const [currentPlayer, setCurrentPlayer] = React.useState("X");
             const [gameActive, setGameActive] = React.useState(true);
             const [winner, setWinner] = React.useState(null);
+            const [walletConnected, setWalletConnected] = React.useState(false);
 
             const checkWinner = (board, player) => {
                 const wins = [
@@ -30,7 +34,7 @@
             };
 
             const handleMove = (index) => {
-                if (board[index] !== " " || !gameActive) return;
+                if (board[index] !== " " || !gameActive || !walletConnected) return;
                 const newBoard = [...board];
                 newBoard[index] = currentPlayer;
                 setBoard(newBoard);
@@ -38,6 +42,7 @@
                 if (checkWinner(newBoard, currentPlayer)) {
                     setWinner(currentPlayer);
                     setGameActive(false);
+                    if (currentPlayer === "X") rewardWinner();
                     return;
                 }
                 if (isBoardFull(newBoard)) {
@@ -55,10 +60,36 @@
                 setWinner(null);
             };
 
+            const connectWallet = async () => {
+                await tonConnect.connect();
+                setWalletConnected(true);
+                console.log("Wallet connected:", tonConnect.account);
+            };
+
+            const rewardWinner = async () => {
+                try {
+                    await tonConnect.sendTransaction({
+                        to: tonConnect.account.address,
+                        value: "100000000", // 0.1 TON
+                        message: "Reward for winning Tic-Tac-Toe"
+                    });
+                } catch (e) {
+                    console.error("Transaction failed:", e);
+                }
+            };
+
             return (
                 <div className="text-center">
                     <h1 className="text-3xl font-bold mb-4">Tic-Tac-Toe Web3</h1>
-                    <p className="mb-4">Networked game (Web3 functionality placeholder)</p>
+                    {!walletConnected && (
+                        <button
+                            className="mb-4 px-4 py-2 bg-blue-500 text-white rounded"
+                            onClick={connectWallet}
+                        >
+                            Connect Wallet
+                        </button>
+                    )}
+                    {walletConnected && <p className="mb-4">Wallet Connected!</p>}
                     {winner && (
                         <p className="text-xl mb-4">
                             {winner === "Draw" ? "It's a Draw!" : `${winner} Wins!`}
@@ -75,14 +106,12 @@
                             </button>
                         ))}
                     </div>
-                    {winner && (
-                        <button
-                            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded"
-                            onClick={resetGame}
-                        >
-                            Back to Menu
-                        </button>
-                    )}
+                    <button
+                        className="mt-4 px-4 py-2 bg-blue-500 text-white rounded"
+                        onClick={() => window.Telegram.WebApp.close()}
+                    >
+                        Back to Bot
+                    </button>
                 </div>
             );
         }
