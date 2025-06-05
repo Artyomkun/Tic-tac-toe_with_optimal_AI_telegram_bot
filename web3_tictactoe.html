@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tic-Tac-Toe Web3</title>
+    <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.5/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root" class="flex justify-center items-center h-screen bg-gray-100"></div>
+    <script type="text/babel">
+        function TicTacToe() {
+            const [board, setBoard] = React.useState(Array(9).fill(" "));
+            const [currentPlayer, setCurrentPlayer] = React.useState("X");
+            const [gameActive, setGameActive] = React.useState(true);
+            const [winner, setWinner] = React.useState(null);
+
+            const checkWinner = (board, player) => {
+                const wins = [
+                    [0,1,2], [3,4,5], [6,7,8],
+                    [0,3,6], [1,4,7], [2,5,8],
+                    [0,4,8], [2,4,6]
+                ];
+                return wins.some(([a,b,c]) => board[a] === player && board[b] === player && board[c] === player);
+            };
+
+            const isBoardFull = (board) => {
+                return !board.includes(" ");
+            };
+
+            const handleMove = (index) => {
+                if (board[index] !== " " || !gameActive) return;
+                const newBoard = [...board];
+                newBoard[index] = currentPlayer;
+                setBoard(newBoard);
+
+                if (checkWinner(newBoard, currentPlayer)) {
+                    setWinner(currentPlayer);
+                    setGameActive(false);
+                    return;
+                }
+                if (isBoardFull(newBoard)) {
+                    setWinner("Draw");
+                    setGameActive(false);
+                    return;
+                }
+                setCurrentPlayer(currentPlayer === "X" ? "O" : "X");
+            };
+
+            const resetGame = () => {
+                setBoard(Array(9).fill(" "));
+                setCurrentPlayer(Math.random() < 0.5 ? "X" : "O");
+                setGameActive(true);
+                setWinner(null);
+            };
+
+            return (
+                <div className="text-center">
+                    <h1 className="text-3xl font-bold mb-4">Tic-Tac-Toe Web3</h1>
+                    <p className="mb-4">Networked game (Web3 functionality placeholder)</p>
+                    {winner && (
+                        <p className="text-xl mb-4">
+                            {winner === "Draw" ? "It's a Draw!" : `${winner} Wins!`}
+                        </p>
+                    )}
+                    <div className="grid grid-cols-3 gap-2 w-64 mx-auto">
+                        {board.map((cell, index) => (
+                            <button
+                                key={index}
+                                className="w-20 h-20 bg-white border-2 border-gray-300 text-2xl flex items-center justify-center"
+                                onClick={() => handleMove(index)}
+                            >
+                                {cell}
+                            </button>
+                        ))}
+                    </div>
+                    {winner && (
+                        <button
+                            className="mt-4 px-4 py-2 bg-blue-500 text-white rounded"
+                            onClick={resetGame}
+                        >
+                            Back to Menu
+                        </button>
+                    )}
+                </div>
+            );
+        }
+
+        ReactDOM.render(<TicTacToe />, document.getElementById("root"));
+    </script>
+</body>
+</html>
