@@ -1,0 +1,14 @@
+{
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "web3": "^4.16.0"
+  },
+  "scripts": {
+    "build": "tailwindcss -i ./src/input.css -o ./dist/output.css",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "tailwindcss": "^4.1.8"
+  }
+}

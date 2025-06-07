@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tic-Tac-Toe Bot</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/web3@4.4.0/dist/web3.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const App = () => {
+      const [games, setGames] = useState([]);
+      const contractAddress = "YOUR_CONTRACT_ADDRESS"; // Replace with your contract address
+      const infuraUrl = "https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID"; // Replace with your Infura ID
+      const contractAbi = [
+        {
+          "inputs": [
+            {"internalType": "string", "name": "_playerSymbol", "type": "string"},
+            {"internalType": "string", "name": "_aiSymbol", "type": "string"},
+            {"internalType": "string", "name": "_outcome", "type": "string"}
+          ],
+          "name": "saveGameResult",
+          "outputs": [],
+          "stateMutability": "nonpayable",
+          "type": "function"
+        },
+        {
+          "inputs": [
+            {"internalType": "uint256", "name": "_gameId", "type": "uint256"}
+          ],
+          "name": "verifyGameData",
+          "outputs": [
+            {"internalType": "address", "name": "", "type": "address"},
+            {"internalType": "string", "name": "", "type": "string"},
+            {"internalType": "string", "name": "", "type": "string"},
+            {"internalType": "string", "name": "", "type": "string"},
+            {"internalType": "uint256", "name": "", "type": "uint256"}
+          ],
+          "stateMutability": "view",
+          "type": "function"
+        },
+        {
+          "inputs": [],
+          "name": "gameCount",
+          "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+          "stateMutability": "view",
+          "type": "function"
+        }
+      ];
+
+      useEffect(() => {
+        const fetchGames = async () => {
+          try {
+            const web3 = new Web3(infuraUrl);
+            const contract = new web3.eth.Contract(contractAbi, contractAddress);
+            const gameCount = await contract.methods.gameCount().call();
+            const gameList = [];
+            for (let i = 0; i < gameCount; i++) {
+              const game = await contract.methods.verifyGameData(i).call();
+              gameList.push({
+                id: i + 1,
+                player: game[0],
+                playerSymbol: game[1],
+                aiSymbol: game[2],
+                outcome: game[3],
+                timestamp: new Date(Number(game[4]) * 1000).toLocaleString()
+              });
+            }
+            setGames(gameList);
+          } catch (error) {
+            console.error("Error fetching games:", error);
+          }
+        };
+        fetchGames();
+      }, []);
+
+      return (
+        <div className="bg-white p-6 rounded-lg shadow-lg max-w-2xl w-full">
+          <h1 className="text-3xl font-bold text-center mb-4">Tic-Tac-Toe Bot</h1>
+          <p className="text-center mb-6">Play Tic-Tac-Toe with our Telegram bot and track games on the blockchain!</p>
+          <div className="flex justify-center mb-6">
+            <button
+              onClick={() => window.Telegram.WebApp.openTelegramLink('https://t.me/YOUR_BOT_USERNAME')}
+              className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
+            >
+              Start Bot
+            </button>
+          </div>
+          <h2 className="text-xl font-semibold mb-4">Game History (Blockchain)</h2>
+          {games.length > 0 ? (
+            <ul className="space-y-4">
+              {games.map(game => (
+                <li key={game.id} className="border p-4 rounded">
+                  <p><strong>Game {game.id}:</strong> {game.timestamp}</p>
+                  <p>Player: {game.playerSymbol} (Address: {game.player.slice(0, 6)}...)</p>
+                  <p>AI: {game.aiSymbol}</p>
+                  <p>Outcome: {game.outcome}</p>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-center">No games recorded yet.</p>
+          )}
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

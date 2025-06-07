@@ -1,0 +1,20 @@
+{
+  "name": "tictactoe-bot-website",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+  "test": "jest",
+  "test:coverage": "jest --coverage"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "tailwindcss": "^4.1.8"
+  },
+  "jest": {
+    "testMatch": ["<rootDir>/__tests__/**/*.test.js"]
+  }
+}

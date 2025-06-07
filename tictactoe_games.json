@@ -1,0 +1,20 @@
+[
+  {
+    "data": {
+      "timestamp": "2025-06-06 18:25:00.123456",
+      "player_symbol": "X",
+      "ai_symbol": "O",
+      "outcome": "Human Win"
+    },
+    "signature": "a1b2c3..."
+  },
+  {
+    "data": {
+      "timestamp": "2025-06-06 18:26:00.654321",
+      "player_symbol": "O",
+      "ai_symbol": "X",
+      "outcome": "Draw"
+    },
+    "signature": "d4e5f6..."
+  }
+]
