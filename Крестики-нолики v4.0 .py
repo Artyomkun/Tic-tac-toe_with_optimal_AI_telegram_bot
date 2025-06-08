@@ -4,91 +4,49 @@ import random
 import time
 import asyncio
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+import sys
+from copy import deepcopy
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
     filters,
-    ContextTypes
+    ContextTypes,
+    AIORateLimiter
 )
-from uuid import uuid4
 from dotenv import load_dotenv
-from web3 import Web3
+from filelock import FileLock
+
+def acquire_lock():
+    lock = FileLock("bot.lock")
+    try:
+        lock.acquire(timeout=1.0)
+        return lock
+    except:
+        print("Error: Another bot instance is running. Exiting...")
+        sys.exit(1)
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-INFURA_PROJECT_ID = os.getenv("INFURA_PROJECT_ID")
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-CONTRACT_ADDRESS = os.getenv("CONTRACT_ADDRESS")
 
-if not all([BOT_TOKEN, INFURA_PROJECT_ID, PRIVATE_KEY, CONTRACT_ADDRESS]):
-    print("Ошибка: Не все переменные окружения заданы")
-    exit()
+if not BOT_TOKEN or not isinstance(BOT_TOKEN, str) or len(BOT_TOKEN.split(':')) != 2:
+    print("❌ Ошибка: Неверный или отсутствует BOT_TOKEN.")
+    sys.exit(1)
 else:
-    print(f"Токен загружен: {BOT_TOKEN[:10]}...")
-    print(f"Infura Project ID: {INFURA_PROJECT_ID[:10]}...")
+    print(f"✅ Токен загружен: {BOT_TOKEN[:10]}...")
 
-# Web3 setup
-w3 = Web3(Web3.HTTPProvider(f'https://mainnet.infura.io/v3/{INFURA_PROJECT_ID}'))
-if not w3.is_connected():
-    print("Ошибка: Не удалось подключиться к Infura")
-    exit()
-
-# Contract setup
-contract_abi = [  # Replace with your contract's ABI
-    {
-        "inputs": [
-            {"internalType": "string", "name": "_playerSymbol", "type": "string"},
-            {"internalType": "string", "name": "_aiSymbol", "type": "string"},
-            {"internalType": "string", "name": "_outcome", "type": "string"}
-        ],
-        "name": "saveGameResult",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function"
-    },
-    {
-        "inputs": [
-            {"internalType": "uint256", "name": "_gameId", "type": "uint256"}
-        ],
-        "name": "verifyGameData",
-        "outputs": [
-            {"internalType": "address", "name": "", "type": "address"},
-            {"internalType": "string", "name": "", "type": "string"},
-            {"internalType": "string", "name": "", "type": "string"},
-            {"internalType": "string", "name": "", "type": "string"},
-            {"internalType": "uint256", "name": "", "type": "uint256"}
-        ],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [],
-        "name": "gameCount",
-        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function"
-    }
-]
-contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=contract_abi)
-account = w3.eth.account.from_key(PRIVATE_KEY)
-
-# Logging setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Game settings
 settings = {
     "logs_enabled": True,
     "language": "ru",
-    "ai_delay": 2.0,
+    "ai_delay": 0.3,
     "adaptivity_level": 0.7,
     "difficulty": "medium",
 }
 
-# Game memory and stats
 ai_memory = {}
 human_memory = {}
 ai_logs = []
@@ -97,312 +55,232 @@ stats = {
     "Human": {"wins": 0, "losses": 0, "draws": 0},
 }
 
-# Translations
 translations = {
     "ru": {
-        "welcome_message": "Добро пожаловать в Крестики-Нолики! 🎮\nВыберите режим игры:",
+        "welcome_message": "Добро пожаловать в Крестики-Нолики! 🎮\nВыберите язык:",
         "game_start": "Игра начинается! Вы - {player}, ИИ - {opponent}. Ваш ход!",
-        "invalid_move": "Неверный ход! Выберите другую клетку.",
+        "invalid_move": "Неверный ход! В режиме ИИ против ИИ ходят только ИИ.",
         "player_wins": "{player} побеждает! 🏆",
         "draw": "Ничья! 🤝",
         "play_again": "Сыграть еще?",
         "yes_button": "Да",
         "no_button": "Нет",
         "game_exit": "Игра завершена. До встречи! 👋",
-        "difficulty_prompt": "Выберите сложность: easy, medium, hard",
+        "difficulty_prompt": "Выберите сложность",
         "invalid_difficulty": "Неверная сложность. Используйте: easy, medium, hard",
         "difficulty_set": "Сложность установлена: {difficulty}",
-        "language_prompt": "Выберите язык: ru, en, ja, it, hi",
-        "invalid_language": "Неверный язык. Используйте: ru, en, ja, it, hi",
+        "language_prompt": "Выберите язык",
         "language_set": "Язык установлен: {language}",
-        "board_message": "Текущая доска:",
         "ai_move": "ИИ ({player}) ходит на позицию {move}.",
-        "settings_menu": "Настройки:\n/difficulty - Сложность\n/language - Язык",
+        "settings_menu": "Выберите настройку",
         "ai_thinking": "ИИ думает...",
-        "play_button": "Играть",
-        "info_button": "Инфо 🚨",
-        "language_button": "Смена языка",
-        "profile_button": "Профиль",
-        "select_language": "Какой язык выбрать?",
         "game_mode_prompt": "Выберите режим игры:",
         "classic_mode": "Классическая игра",
         "player_vs_ai": "Игрок против ИИ",
         "ai_vs_player": "ИИ против игрока",
         "ai_vs_ai": "ИИ против ИИ",
-        "web3_mode": "Веб3 игра",
-        "choose_symbol": "Выберите символ: X или O"
+        "choose_symbol": "Выберите символ (X или O):",
+        "error_message": "Ошибка! Доска не обновлена. Перезапустите игру (/start).",
+        "invalid_symbol": "Неверный символ. Используйте: X или O",
+        "your_turn": "Ваш ход!",
+        "return_to_menu": "Вернуться в меню",
+        "main_menu": "Главное меню",
+        "play_again_or_menu": "Хотите сыграть еще раз или вернуться в меню?",
+        "play_button": "Играть",
+        "profile_button": "Профиль",
+        "info_button": "Инфо",
+        "feature_coming_soon": "Функция скоро появится",
+        "choose_symbol": "Выберите символ: X или O",
+        "invalid_symbol": "Неверный символ. Пожалуйста, выберите X или O."
     },
     "en": {
-        "welcome_message": "Welcome to Tic-Tac-Toe! 🎮\nChoose a game mode:",
+        "welcome_message": "Welcome to Tic-Tac-Toe! 🎮\nChoose a language:",
         "game_start": "Game starts! You are {player}, AI is {opponent}. Your turn!",
-        "invalid_move": "Invalid move! Try another cell.",
+        "invalid_move": "Invalid move! In AI vs AI mode, only AI moves are allowed.",
         "player_wins": "{player} wins! 🏆",
-        "draw": "It's a draw! 🤝",
+        "draw": "It's a draw! 😊",
         "play_again": "Play again?",
         "yes_button": "Yes",
         "no_button": "No",
-        "game_exit": "Game over. See you next time! 👋",
-        "difficulty_prompt": "Choose difficulty: easy, medium, hard",
-        "invalid_difficulty": "Invalid difficulty. Use: easy, medium, hard",
-        "difficulty_set": "Difficulty set to: {difficulty}",
-        "language_prompt": "Choose language: ru, en, ja, it, hi",
-        "invalid_language": "Invalid language. Use: ru, en, ja, it, hi",
-        "language_set": "Language set to: {language}",
-        "board_message": "Current board:",
+        "game_exit": "Game over! See you next time! 😊",
+        "difficulty_prompt": "Choose difficulty:",
+        "invalid_difficulty": "Invalid difficulty! Use: easy, medium, hard",
+        "difficulty_set": "Difficulty set: {difficulty}",
+        "language_prompt": "Choose a language:",
+        "language_set": "Language set: to {language}",
         "ai_move": "AI ({player}) moves to position {move}.",
-        "settings_menu": "Settings:\n/difficulty - Difficulty\n/language - Language",
+        "settings_menu": "Select a setting:",
         "ai_thinking": "AI is thinking...",
-        "play_button": "Play",
-        "info_button": "Info 🚨",
-        "language_button": "Change Language",
-        "profile_button": "Profile",
-        "select_language": "Which language to choose?",
         "game_mode_prompt": "Choose a game mode:",
         "classic_mode": "Classic Game",
         "player_vs_ai": "Player vs AI",
         "ai_vs_player": "AI vs Player",
         "ai_vs_ai": "AI vs AI",
-        "web3_mode": "Web3 Game",
-        "choose_symbol": "Choose symbol: X or O"
+        "choose_symbol": "Choose symbol (X or O):",
+        "error_message": "Error! Board not showing? Restart the game (/start).",
+        "invalid_symbol": "Invalid symbol! Use: X or O",
+        "your_turn": "Your turn!",
+        "return_to_menu": "Return to menu",
+        "main_menu": "Main Menu",
+        "play_again_or_menu": "Do you want to play again or return to menu?",
+        "play_button": "Play",
+        "profile_button": "Profile",
+        "info_button": "Info",
+        "feature_coming_soon": "Feature coming soon",
+        "choose_symbol": "Choose your symbol: X or O",
+        "invalid_symbol": "Invalid symbol. Please choose X or O."
     },
     "ja": {
-        "welcome_message": "tic-tac-toeへようこそ！ 🎮\nゲームモードを選択してください：",
-        "game_start": "ゲーム開始！あなたは{player}、AIは{opponent}です。あなたのターン！",
-        "invalid_move": "無効な動きです！別のセルを試してください。",
-        "player_wins": "{player}が勝ちました！ 🏆",
-        "draw": "引き分けです！ 🤝",
-        "play_again": "もう一度プレイしますか？",
-        "yes_button": "はい",
-        "no_button": "いいえ",
-        "game_exit": "ゲーム終了。またお会いしましょう！ 👋",
-        "difficulty_prompt": "難易度を選んでください: easy, medium, hard",
-        "invalid_difficulty": "無効な難易度です。使用: easy, medium, hard",
-        "difficulty_set": "難易度が設定されました: {difficulty}",
-        "language_prompt": "言語を選んでください: ru, en, ja, it, hi",
-        "invalid_language": "無効な言語です。使用: ru, en, ja, it, hi",
-        "language_set": "言語が設定されました: {language}",
-        "board_message": "現在のボード:",
-        "ai_move": "AI ({player}) がポジション {move} に移動しました。",
-        "settings_menu": "設定:\n/difficulty - 難易度\n/language - 言語",
-        "ai_thinking": "AIが考えています...",
+        "main_menu": "メインメニュー",
         "play_button": "プレイ",
-        "info_button": "情報 🚨",
-        "language_button": "言語変更",
-        "profile_button": "プロフィール",
-        "select_language": "どの言語を選びますか？",
-        "game_mode_prompt": "ゲームモードを選択してください：",
-        "classic_mode": "クラシックゲーム",
-        "player_vs_ai": "プレイヤー対AI",
-        "ai_vs_player": "AI対プレイヤー",
-        "ai_vs_ai": "AI対AI",
-        "web3_mode": "Web3ゲーム",
-        "choose_symbol": "シンボルを選択してください：XまたはO"
+        "player_wins": "{player}の勝利！🏆",
+        "draw": "引き分け！🤝"
     },
     "it": {
-        "welcome_message": "Benvenuto a Tris! 🎮\nScegli una modalità di gioco:",
-        "game_start": "Il gioco inizia! Tu sei {player}, l'IA è {opponent}. Tocca a te!",
-        "invalid_move": "Mossa non valida! Prova un'altra cella.",
-        "player_wins": "{player} vince! 🏆",
-        "draw": "È un pareggio! 🤝",
-        "play_again": "Giocare di nuovo?",
-        "yes_button": "Sì",
-        "no_button": "No",
-        "game_exit": "Partita finita. Ci vediamo! 👋",
-        "difficulty_prompt": "Scegli la difficoltà: easy, medium, hard",
-        "invalid_difficulty": "Difficoltà non valida. Usa: easy, medium, hard",
-        "difficulty_set": "Difficoltà impostata: {difficulty}",
-        "language_prompt": "Scegli la lingua: ru, en, ja, it, hi",
-        "invalid_language": "Lingua non valida. Usa: ru, en, ja, it, hi",
-        "language_set": "Lingua impostata: {language}",
-        "board_message": "Tavolo attuale:",
-        "ai_move": "L'IA ({player}) si muove alla posizione {move}.",
-        "settings_menu": "Impostazioni:\n/difficulty - Difficoltà\n/language - Lingua",
-        "ai_thinking": "L'IA sta pensando...",
+        "main_menu": "Menu Principale",
         "play_button": "Gioca",
-        "info_button": "Info 🚨",
-        "language_button": "Cambia Lingua",
-        "profile_button": "Profilo",
-        "select_language": "Quale lingua scegliere?",
-        "game_mode_prompt": "Scegli una modalità di gioco:",
-        "classic_mode": "Gioco Classico",
-        "player_vs_ai": "Giocatore vs IA",
-        "ai_vs_player": "IA vs Giocatore",
-        "ai_vs_ai": "IA vs IA",
-        "web3_mode": "Gioco Web3",
-        "choose_symbol": "Scegli il simbolo: X o O"
+        "player_wins": "{player} vince! 🏆",
+        "draw": "È un pareggio! 🤝"
     },
     "hi": {
-        "welcome_message": "टिक-टैक-टो में आपका स्वागत है! 🎮\nखेल मोड चुनें:",
-        "game_start": "खेल शुरू! आप {player} हैं, AI {opponent} है। आपकी बारी!",
-        "invalid_move": "अमान्य चाल! दूसरी सेल आज़माएं।",
-        "player_wins": "{player} जीत गया! 🏆",
-        "draw": "यह ड्रॉ है! 🤝",
-        "play_again": "फिर से खेलें?",
-        "yes_button": "हां",
-        "no_button": "नहीं",
-        "game_exit": "खेल खत्म। फिर मिलेंगे! 👋",
-        "difficulty_prompt": "कठिनाई चुनें: easy, medium, hard",
-        "invalid_difficulty": "अमान्य कठिनाई। उपयोग करें: easy, medium, hard",
-        "difficulty_set": "कठिनाई सेट: {difficulty}",
-        "language_prompt": "भाषा चुनें: ru, en, ja, it, hi",
-        "invalid_language": "अमान्य भाषा। उपयोग करें: ru, en, ja, it, hi",
-        "language_set": "भाषा सेट: {language}",
-        "board_message": "वर्तमान बोर्ड:",
-        "ai_move": "AI ({player}) ने स्थिति {move} पर चाल चली।",
-        "settings_menu": "सेटिंग्स:\n/difficulty - कठिनाई\n/language - भाषा",
-        "ai_thinking": "AI सोच रहा है...",
+        "main_menu": "मुख्य मेनू",
         "play_button": "खेलें",
-        "info_button": "जानकारी 🚨",
-        "language_button": "भाषा बदलें",
-        "profile_button": "प्रोफाइल",
-        "select_language": "कौन सी भाषा चुनें?",
-        "game_mode_prompt": "खेल मोड चुनें:",
-        "classic_mode": "क्लासिक गेम",
-        "player_vs_ai": "खिलाड़ी बनाम AI",
-        "ai_vs_player": "AI बनाम खिलाड़ी",
-        "ai_vs_ai": "AI बनाम AI",
-        "web3_mode": "वेब3 गेम",
-        "choose_symbol": "प्रतीक चुनें: X या O"
+        "player_wins": "{player} जीता! 🏆",
+        "draw": "यह ड्रॉ है! 🤝"
     }
 }
 
-def get_text(context: ContextTypes.DEFAULT_TYPE, key, **kwargs):
+def get_text(context: str, key: str, **kwargs) -> str:
     lang = context.user_data.get("language", settings["language"])
-    text = translations.get(lang, translations["ru"]).get(key, key)
+    if lang not in translations:
+        logger.warning(f"Language {lang} not supported, falling back to 'ru'")
+        lang = "ru"
+        context.user_data["language"] = lang
+    text = translations[lang].get(key, translations["ru"].get(key, key))
     return text.format(**kwargs if kwargs else {})
+
+def save_board_state(user_id: int, board: list, move_count: int):
+    try:
+        state_file = "board_state.json"
+        data = {}
+        if os.path.exists(state_file):
+            with open(state_file, 'r') as f:
+                data = json.load(f)
+        data[str(user_id)] = {
+            "board": board,
+            "move_count": move_count,
+            "timestamp": time.time()
+        }
+        with open(state_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        logger.debug(f"Saved board state for user {user_id}: {board}, move_count: {move_count}")
+    except Exception as e:
+        logger.error(f"Failed to save board state for user {user_id}: {e}")
+
+def load_board_state(user_id: int) -> tuple | None:
+    try:
+        state_file = "board_state.json"
+        if os.path.exists(state_file):
+            with open(state_file, 'r') as f:
+                data = json.load(f)
+            if str(user_id) in data:
+                state = data[str(user_id)]
+                board = state["board"]
+                move_count = state["move_count"]
+                if (isinstance(board, list) and len(board) == 9 and
+                    all(c in [" ", "X", "O"] for c in board)):
+                    logger.debug(f"Loaded board state for user {user_id}: {board}, move_count: {move_count}")
+                    return board, move_count
+                else:
+                    logger.warning(f"Invalid board state for user {user_id}: {board}")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to load board state for user {user_id}: {e}")
+        return None
+
+def clear_board_state(user_id: int):
+    try:
+        state_file = "board_state.json"
+        if os.path.exists(state_file):
+            with open(state_file, 'r') as f:
+                data = json.load(f)
+            if str(user_id) in data:
+                del data[str(user_id)]
+                with open(state_file, 'w') as f:
+                    json.dump(data, f, indent=2)
+                logger.debug(f"Cleared board state for user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to clear board state for user {user_id}: {e}")
 
 def create_board():
     return [" " for _ in range(9)]
 
-def format_board(board):
-    ascii_board = "╔═══╦═══╦═══╗\n"
-    for i in range(3):
-        ascii_board += "║ "
-        for j in range(3):
-            idx = i * 3 + j
-            cell = board[idx] if board[idx] != " " else " "
-            ascii_board += f"{cell} ║ "
-        ascii_board += "\n"
-        if i < 2:
-            ascii_board += "╠═══╬═══╬═══╣\n"
-        else:
-            ascii_board += "╚═══╩═══╩═══╝"
-    return ascii_board
+def format_board(board: list) -> str:
+    display = [board[i] if board[i] in ["X", "O"] else " " for i in range(9)]
+    return (
+        f"{display[0]} | {display[1]} | {display[2]}\n"
+        f"---------\n"
+        f"{display[3]} | {display[4]} | {display[5]}\n"
+        f"---------\n"
+        f"{display[6]} | {display[7]} | {display[8]}"
+    )
 
-def save_game_result(player_symbol, ai_symbol, outcome):
-    try:
-        nonce = w3.eth.get_transaction_count(account.address)
-        gas_price = w3.eth.gas_price
-        txn = contract.functions.saveGameResult(player_symbol, ai_symbol, outcome).build_transaction({
-            'from': account.address,
-            'nonce': nonce,
-            'gas': 200000,
-            'gasPrice': gas_price,
-            'chainId': 1  # Ethereum mainnet chain ID
-        })
-        signed_txn = w3.eth.account.sign_transaction(txn, PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=120)
-        if receipt.status == 1:
-            logger.info(f"Game result saved, tx hash: {tx_hash.hex()}")
-            return tx_hash.hex()
-        else:
-            logger.error("Transaction failed")
-            return None
-    except Exception as e:
-        logger.error(f"Error saving game result: {e}")
-        return None
-
-def verify_game_data(game_id):
-    try:
-        result = contract.functions.verifyGameData(game_id).call()
-        return {
-            'player': result[0],
-            'player_symbol': result[1],
-            'ai_symbol': result[2],
-            'outcome': result[3],
-            'timestamp': result[4]
-        }
-    except Exception as e:
-        logger.error(f"Error verifying game data: {e}")
-        return None
-
-def create_keyboard(board):
-    keyboard = []
-    for i in range(3):
-        row = []
-        for j in range(3):
-            idx = i * 3 + j
-            cell = board[idx] if board[idx] != " " else " "
-            callback = f"move_{idx}" if board[idx] == " " else "invalid"
-            row.append(InlineKeyboardButton(cell, callback_data=callback))
-        keyboard.append(row)
-    return InlineKeyboardMarkup(keyboard)
-
-def create_language_keyboard():
-    keyboard = [
-        [InlineKeyboardButton("Русский", callback_data="lang_ru")],
-        [InlineKeyboardButton("English", callback_data="lang_en")],
-        [InlineKeyboardButton("日本語", callback_data="lang_ja")],
-        [InlineKeyboardButton("Italiano", callback_data="lang_it")],
-        [InlineKeyboardButton("हिन्दी", callback_data="lang_hi")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def create_game_mode_keyboard(context: ContextTypes.DEFAULT_TYPE, include_web3=False):
-    lang = context.user_data.get("language", settings["language"])
-    keyboard = [
-        [InlineKeyboardButton(get_text(context, "classic_mode"), callback_data="mode_classic")],
-        [InlineKeyboardButton(get_text(context, "player_vs_ai"), callback_data="mode_pva")],
-        [InlineKeyboardButton(get_text(context, "ai_vs_player"), callback_data="mode_avp")],
-        [InlineKeyboardButton(get_text(context, "ai_vs_ai"), callback_data="mode_ava")]
-    ]
-    if include_web3:
-        keyboard.append([InlineKeyboardButton(get_text(context, "web3_mode"), callback_data="mode_web3")])
-    return InlineKeyboardMarkup(keyboard)
-
-def create_symbol_keyboard(context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("X", callback_data="symbol_X"), InlineKeyboardButton("O", callback_data="symbol_O")]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def create_play_again_keyboard(context: ContextTypes.DEFAULT_TYPE):
-    lang = context.user_data.get("language", settings["language"])
+def create_keyboard(board: list, interactive: bool = True):
     keyboard = [
         [
-            InlineKeyboardButton(get_text(context, "yes_button"), callback_data="play_again_yes"),
-            InlineKeyboardButton(get_text(context, "no_button"), callback_data="play_again_no")
+            board[i * 3 + j] if board[i * 3 + j] in ["X", "O"] else str(i * 3 + j + 1) if interactive else " "
+            for j in range(3)
         ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-def create_main_menu(context: ContextTypes.DEFAULT_TYPE):
-    lang = context.user_data.get("language", settings["language"])
-    keyboard = [
-        [KeyboardButton(get_text(context, "play_button"))],
-        [
-            KeyboardButton(get_text(context, "profile_button")),
-            KeyboardButton(get_text(context, "info_button"))
-        ]
+        for i in range(3)
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-def check_winner(board, player):
+def create_main_menu_keyboard(context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [get_text(context, "play_button")],
+        [get_text(context, "profile_button"), get_text(context, "info_button")]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+def create_language_keyboard():
+    keyboard = [
+        ["Русский (ru)"],
+        ["English (en)"],
+        ["日本語 (ja)"],
+        ["Italiano (it)"],
+        ["हिन्दी (hi)"]
+    ]
+    return ReplyKeyboardMarkup(keyboard)
+
+def create_game_mode_keyboard(context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [get_text(context, "classic_mode")],
+        [get_text(context, "player_vs_ai")],
+        [get_text(context, "ai_vs_player")],
+        [get_text(context, "ai_vs_ai")]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=True,
+        input_field_keyboard=get_text(context, "game_mode_prompt")
+    )
+
+def check_winner(board: list, player: str) -> bool:
     wins = [(0,1,2), (3,4,5), (6,7,8), (0,3,6), (1,4,7), (2,5,8), (0,4,8), (2,4,6)]
     return any(board[a] == board[b] == board[c] == player for a, b, c in wins)
 
-def is_board_full(board):
+def is_board_full(board: list) -> bool:
     return " " not in board
 
-def get_available_moves(board):
+def get_available_moves(board: list) -> list:
     return [i for i, spot in enumerate(board) if spot == " "]
 
-def log_move(board, move, player):
+def log_move(board: list, move: int, player: str):
     if settings["logs_enabled"]:
         ai_logs.append({"board": board[:], "move": move, "player": player})
 
-def update_stats(winner):
+def update_stats(winner: str | None):
     if winner == "AI":
         stats["AI"]["wins"] += 1
         stats["Human"]["losses"] += 1
@@ -413,16 +291,16 @@ def update_stats(winner):
         stats["AI"]["draws"] += 1
         stats["Human"]["draws"] += 1
 
-def evaluate_board(board):
+def evaluate_board(board: list) -> int | None:
     if check_winner(board, "O"):
         return 1
-    if check_winner(board, "X"):
+    elif check_winner(board, "X"):
         return -1
-    if is_board_full(board):
+    elif is_board_full(board):
         return 0
     return None
 
-def minimax(board, depth, is_maximizing, player, opponent, alpha=-float("inf"), beta=float("inf")):
+def minimax(board: list, depth: int, is_maximizing: bool, player: str, opponent: str, alpha: float=-float("inf"), beta: float=float("inf")) -> float:
     score = evaluate_board(board)
     if score is not None:
         return score
@@ -449,47 +327,62 @@ def minimax(board, depth, is_maximizing, player, opponent, alpha=-float("inf"), 
                 break
         return best_score
 
-def ai_move(board, player, difficulty):
+def ai_move(board: list, player: str, difficulty: str) -> int | None:
+    start_time = time.time()
+    board_copy = deepcopy(board)
     opponent = "O" if player == "X" else "X"
+    available_moves = get_available_moves(board_copy)
+    if not available_moves:
+        logger.warning(f"No available moves for player {player}, board: {board_copy}")
+        return None
     if difficulty == "easy":
-        time.sleep(settings["ai_delay"])
-        return random.choice(get_available_moves(board))
+        move = random.choice(available_moves)
     elif difficulty == "medium":
         if random.random() < settings["adaptivity_level"]:
-            key = str(tuple(board))
-            if player == "X" and key in ai_memory:
-                time.sleep(settings["ai_delay"])
-                return random.choices(ai_memory[key]["moves"], weights=ai_memory[key]["weights"])[0]
-            elif player == "O" and key in human_memory:
-                time.sleep(settings["ai_delay"])
-                return random.choices(human_memory[key]["moves"], weights=human_memory[key]["weights"])[0]
-        time.sleep(settings["ai_delay"])
-        return random.choice(get_available_moves(board))
-    else:  # hard
-        best_score = -float("inf") if player == "O" else float("inf")
-        best_moves = []
-        for move in get_available_moves(board):
-            board[move] = player
-            score = minimax(board, 0, player == "X", player, opponent)
-            board[move] = " "
-            if player == "O":
-                if score > best_score:
-                    best_score = score
-                    best_moves = [move]
-                elif score == best_score:
-                    best_moves.append(move)
+            key = str(tuple(board_copy))
+            memory = ai_memory if player == "X" else human_memory
+            if key in memory:
+                move = random.choices(memory[key]["moves"], weights=memory[key]["weights"])[0]
             else:
-                if score < best_score:
-                    best_score = score
-                    best_moves = [move]
-                elif score == best_score:
-                    best_moves.append(move)
-        time.sleep(settings["ai_delay"])
-        return random.choice(best_moves)
+                move = random.choice(available_moves)
+        else:
+            move = random.choice(available_moves)
+    else:  # hard
+        key = str(tuple(board_copy))
+        if key in ai_memory:
+            move = random.choices(ai_memory[key]["moves"], weights=ai_memory[key]["weights"])[0]
+        else:
+            best_score = -float("inf") if player == "O" else float("inf")
+            best_moves = []
+            for move in available_moves:
+                board_copy[move] = player
+                score = minimax(board_copy, 0, player == "X", player, opponent)
+                board_copy[move] = " "
+                if player == "O":
+                    if score > best_score:
+                        best_score = score
+                        best_moves = [move]
+                    elif score == best_score:
+                        best_moves.append(move)
+                else:
+                    if score < best_score:
+                        best_score = score
+                        best_moves = [move]
+                    elif score == best_score:
+                        best_moves.append(move)
+            move = random.choice(best_moves)
+            update_memory(board_copy, move, player, "pending")
+    if move is None or move < 0 or move >= 9 or board_copy[move] != " ":
+        logger.error(f"Invalid AI move {move} for {player}, board: {board_copy}")
+        return None
+    logger.debug(f"AI move {move} for {player} took {time.time() - start_time:.2f}s")
+    return move
 
-def update_memory(board, move, player, outcome):
+def update_memory(board: list, move: int, player: str, outcome: str):
     board_key = str(tuple(board))
     memory = ai_memory if player == "O" else human_memory
+    if len(memory) > 1000:
+        memory.pop(list(memory.keys())[0])
     if board_key not in memory:
         memory[board_key] = {"moves": [], "weights": []}
     if move not in memory[board_key]["moves"]:
@@ -499,452 +392,528 @@ def update_memory(board, move, player, outcome):
         idx = memory[board_key]["moves"].index(move)
         memory[board_key]["weights"][idx] += 1 if outcome == "win" else 0.5
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def try_update_message(message, text, reply_markup, context, max_retries=3, initial_delay=1):
+    if (
+        context.user_data.get("last_message_text") == text,
+        context.user_data.get("last_board_state") == reply_markup
+    ):
+        logger.debug("Skipped duplicate message update")
+        return message
+
+    for attempt in range(max_retries):
+        try:
+            await message.edit_text(text=text, reply_markup=reply_markup)
+            context.user_data["last_message_text"] = text
+            context.user_data["last_board_state"] = reply_markup
+            return message
+        except Exception as e:
+            logger.warning(f"Edit attempt {attempt+1}/{max_retries} failed: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(initial_delay * (2 ** attempt))
     try:
-        language_prompt = "\n".join(
-            translations[lang]["select_language"] for lang in ["ru", "en", "ja", "it", "hi"]
-        )
-        await update.message.reply_text(
-            language_prompt,
-            reply_markup=create_language_keyboard()
-        )
+        new_message = await message.chat.send_message(text=text, reply_markup=reply_markup)
+        context.user_data["last_message_text"] = text
+        context.user_data["last_board_state"] = reply_markup
+        logger.info("Sent new message as fallback after edit failed")
+        return new_message
     except Exception as e:
-        logger.error(f"Error in start command: {e}")
-        await update.message.reply_text(get_text(context, "error_message"))
+        logger.error(f"Failed to send fallback message: {e}")
+        return None
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+async def send_error_message(message, context):
+    await message.reply_text(
+        reply_text=get_text(context, "error_message"),
+        reply_markup=create_main_menu_keyboard(context)
+    )
 
-    if data.startswith("lang_"):
-        lang = data.split("_")[1]
-        if lang in ["ru", "en", "ja", "it", "hi"]:
-            context.user_data["language"] = lang
-            await query.message.reply_text(
-                get_text(context, "game_mode_prompt"),
-                reply_markup=create_game_mode_keyboard(context, include_web3=True)
-            )
-        else:
-            await query.message.reply_text(
-                get_text(context, "invalid_language"),
-                reply_markup=create_language_keyboard()
-            )
-        return
-
-    if data.startswith("mode_"):
-        mode = data.split("_")[1]
-        context.user_data["game_mode"] = mode
-        if mode == "web3":
-            context.user_data["game_active"] = True
-            context.user_data["board"] = create_board()
-            context.user_data["human_player"] = "X"
-            context.user_data["ai_player"] = "O"
-            await query.message.reply_text(
-                get_text(context, "game_start", player="X", opponent="O"),
-                reply_markup=create_keyboard(context.user_data["board"])
-            )
-            return
-        elif mode == "ava":
-            await start_ai_vs_ai(update, context)
-            return
-        else:
-            await query.message.reply_text(
-                get_text(context, "choose_symbol"),
-                reply_markup=create_symbol_keyboard(context)
-            )
-        return
-
-    if data.startswith("symbol_"):
-        symbol = data.split("_")[1]
-        context.user_data["human_player"] = symbol
-        context.user_data["ai_player"] = "O" if symbol == "X" else "X"
-        context.user_data["board"] = create_board()
-        context.user_data["game_active"] = True
-        mode = context.user_data.get("game_mode")
-        if mode == "classic" or mode == "pva":
-            await start_player_vs_ai(update, context, player_first=True)
-        elif mode == "avp":
-            await start_player_vs_ai(update, context, player_first=False)
-        return
-
-    if data == "play_again_yes":
-        context.user_data["board"] = create_board()
-        context.user_data["game_active"] = True
-        mode = context.user_data.get("game_mode")
-        if mode == "classic" or mode == "pva":
-            await start_player_vs_ai(update, context, player_first=True)
-        elif mode == "avp":
-            await start_player_vs_ai(update, context, player_first=False)
-        elif mode == "ava":
-            await start_ai_vs_ai(update, context)
-        elif mode == "web3":
-            await query.message.reply_text(
-                get_text(context, "game_start", player=context.user_data["human_player"], opponent=context.user_data["ai_player"]),
-                reply_markup=create_keyboard(context.user_data["board"])
-            )
-        return
-    elif data == "play_again_no":
-        context.user_data["game_active"] = False
-        await query.message.reply_text(
-            get_text(context, "welcome_message"),
-            reply_markup=create_main_menu(context)
-        )
-        return
-
-    if not context.user_data.get("game_active", False):
-        await query.message.reply_text(get_text(context, "game_exit"))
-        return
-
-    board = context.user_data["board"]
-    if data.startswith("move_"):
-        move = int(data.split("_")[1])
-        if 0 <= move < 9 and board[move] == " ":
-            board[move] = context.user_data["human_player"]
-            log_move(board, move, context.user_data["human_player"])
-            outcome = "win" if check_winner(board, context.user_data["human_player"]) else "pending"
-            update_memory(board[:], move, context.user_data["human_player"], outcome)
-
-            await query.message.edit_text(
-                text=f"{get_text(context, 'board_message')}\n{format_board(board)}",
-                reply_markup=create_keyboard(board)
-            )
-
-            if check_winner(board, context.user_data["human_player"]):
-                await query.message.reply_text(get_text(context, "player_wins", player=context.user_data["human_player"]))
-                update_stats("Human")
-                if context.user_data.get("game_mode") == "web3":
-                    tx_hash = save_game_result(
-                        context.user_data["human_player"],
-                        context.user_data["ai_player"],
-                        "Human Win"
-                    )
-                    if tx_hash:
-                        await query.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                    else:
-                        await query.message.reply_text("Failed to save game result to blockchain.")
-                context.user_data["game_active"] = False
-                await query.message.reply_text(
-                    get_text(context, "play_again"),
-                    reply_markup=create_play_again_keyboard(context)
-                )
-                return
-            if is_board_full(board):
-                await query.message.reply_text(get_text(context, "draw"))
-                update_stats(None)
-                if context.user_data.get("game_mode") == "web3":
-                    tx_hash = save_game_result(
-                        context.user_data["human_player"],
-                        context.user_data["ai_player"],
-                        "Draw"
-                    )
-                    if tx_hash:
-                        await query.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                    else:
-                        await query.message.reply_text("Failed to save game result to blockchain.")
-                context.user_data["game_active"] = False
-                await query.message.reply_text(
-                    get_text(context, "play_again"),
-                    reply_markup=create_play_again_keyboard(context)
-                )
-                return
-
-            await query.message.reply_text(get_text(context, "ai_thinking"))
-            ai = ai_move(board, context.user_data["ai_player"], settings["difficulty"])
-            if ai is not None:
-                board[ai] = context.user_data["ai_player"]
-                log_move(board, ai, context.user_data["ai_player"])
-                outcome = "win" if check_winner(board, context.user_data["ai_player"]) else "pending"
-                update_memory(board[:], ai, context.user_data["ai_player"], outcome)
-                await query.message.reply_text(
-                    text=f"{get_text(context, 'board_message')}\n{format_board(board)}\n\n"
-                         f"{get_text(context, 'ai_move', player=context.user_data['ai_player'], move=ai + 1)}",
-                    reply_markup=create_keyboard(board)
-                )
-
-                if check_winner(board, context.user_data["ai_player"]):
-                    await query.message.reply_text(get_text(context, "player_wins", player=context.user_data["ai_player"]))
-                    update_stats("AI")
-                    if context.user_data.get("game_mode") == "web3":
-                        tx_hash = save_game_result(
-                            context.user_data["human_player"],
-                            context.user_data["ai_player"],
-                            "AI Win"
-                        )
-                        if tx_hash:
-                            await query.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                        else:
-                            await query.message.reply_text("Failed to save game result to blockchain.")
-                    context.user_data["game_active"] = False
-                    await query.message.reply_text(
-                        get_text(context, "play_again"),
-                        reply_markup=create_play_again_keyboard(context)
-                    )
-                    return
-                if is_board_full(board):
-                    await query.message.reply_text(get_text(context, "draw"))
-                    update_stats(None)
-                    if context.user_data.get("game_mode") == "web3":
-                        tx_hash = save_game_result(
-                            context.user_data["human_player"],
-                            context.user_data["ai_player"],
-                            "Draw"
-                        )
-                        if tx_hash:
-                            await query.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                        else:
-                            await query.message.reply_text("Failed to save game result to blockchain.")
-                    context.user_data["game_active"] = False
-                    await query.message.reply_text(
-                        get_text(context, "play_again"),
-                        reply_markup=create_play_again_keyboard(context)
-                    )
-                    return
-        else:
-            await query.message.reply_text(get_text(context, "invalid_move"))
-    elif data == "invalid":
-        await query.message.reply_text(get_text(context, "invalid_move"))
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.chat.id
+    clear_board_state(user_id)
+    context.user_data.clear()
+    context.user_data["language"] = settings["language"]
+    await update.message.reply_text(
+        reply_text= "get_message" (context, "welcome_message"),
+        reply_markup=create_language_keyboard()
+    )
+    context.user_data["awaiting_language"] = True
 
 async def start_player_vs_ai(update: Update, context: ContextTypes.DEFAULT_TYPE, player_first=True):
-    board = context.user_data["board"]
-    human_player = context.user_data["human_player"]
-    ai_player = context.user_data["ai_player"]
-    await update.callback_query.message.reply_text(
-        get_text(context, "game_start", player=human_player, opponent=ai_player),
-        reply_markup=create_main_menu(context)
-    )
-    if not player_first:
-        await update.callback_query.message.reply_text(get_text(context, "ai_thinking"))
-        ai = ai_move(board, ai_player, settings["difficulty"])
-        if ai is not None:
-            board[ai] = ai_player
-            log_move(board, ai, ai_player)
-            outcome = "win" if check_winner(board, ai_player) else "pending"
-            update_memory(board[:], ai, ai_player, outcome)
-        await update.callback_query.message.reply_text(
-            text=f"{get_text(context, 'board_message')}\n{format_board(board)}\n\n"
-                 f"{get_text(context, 'ai_move', player=ai_player, move=ai + 1)}",
-            reply_markup=create_keyboard(board)
-        )
+    user_data = context.user_data
+    user_id = update.message.chat.id
+    # Try to load saved state
+    saved_state = load_board_state(user_id)
+    if saved_state:
+        board, move_count = saved_state
+        user_data["board"] = board
+        user_data["move_count"] = move_count
+        logger.debug(f"Restored board state for user {user_id} in start_player_vs_AI: {user_data}")
     else:
-        await update.callback_query.message.reply_text(
-            text=f"{get_text(context, 'board_message')}\n{format_board(board)}",
-            reply_markup=create_keyboard(board)
+        user_data["board"] = create_board()
+        user_data["move_count"] = 0
+    user_data.update({
+        "game_active": True,
+        "invalid_input_count": 0,
+        "last_board_state": None,
+        "last_message_text": None
+    })
+    board = user_data["board"]
+    human_player = user_data.get("human_player", "X")
+    ai_player = user_data.get("ai_player", "O")
+
+    message = update.message
+    first_player = human_player if player_first else ai_player
+    await message.reply_text(
+        reply_text=get_text(context, "game_start", player=human_player, opponent=ai_player) +
+        f"\n\nFirst move: {first_player}\n\n{format_board(board)}",
+        reply_markup=create_keyboard(board, interactive=True)
+    )
+    save_board_state(user_id, board, user_data["move_count"])
+
+    if not player_first:
+        if not all(c in [" ", "X", "O"] for c in board):
+            logger.error(f"Invalid board: {board}")
+            user_data["board"] = create_board()
+            save_board_state(user_id, user_data["board"], user_data["move_count"])
+            await send_error_message(message, context)
+            user_data["game_active"] = False
+            return
+
+        game_message = await message.reply_text(
+            reply_text=get_text(context, "ai_thinking"),
+            reply_markup=create_keyboard(board, interactive=True)
         )
+        await asyncio.sleep(settings["ai_delay"])
+        ai_move_idx = ai_move(board, ai_player, settings["difficulty"])
+        if ai_move_idx is None or ai_move_idx < 0 or ai_move_idx >= 9 or board[ai_move_idx] != " ":
+            logger.error(f"AI invalid move: {ai_move_idx}, board: {board}")
+            save_board_state(user_id, board, user_data["move_count"])
+            await send_error_message(message, context)
+            user_data["game_active"] = False
+            return
+
+        board[ai_move_idx] = ai_player
+        log_move(board, ai_move_idx, ai_player)
+        update_memory(board[:], ai_move_idx, ai_player, "win" if check_winner(board, ai_player) else "pending")
+        user_data["move_count"] += 1
+        logger.debug(f"Move {user_data['move_count']}: AI move: {ai_move_idx}, Board: {board}")
+        save_board_state(user_id, board, user_data["move_count"])
+
+        game_message = await try_update_message(
+            game_message,
+            get_text(context, "ai_move", player=ai_player, move=ai_move_idx + 1) + f"\n\n{format_board(board)}",
+            create_keyboard(board, interactive=True),
+            context
+        )
+        if not game_message:
+            game_message = await message.reply_text(
+                reply_text=get_text(context, "ai_move", player=ai_player, move=ai_move_idx + 1) + f"\n\n{format_board(board)}",
+                reply_markup=create_keyboard(board, interactive=True)
+            )
+
+        if check_winner(board, ai_player):
+            game_message = await try_update_message(
+                game_message,
+                get_text(context, "player_wins", player=ai_player) + f"\n\n{format_board(board)}\n\n" + get_text(context, "main_menu"),
+                create_main_menu_keyboard(context),
+                context
+            )
+            if not game_message:
+                game_message = await message.reply_text(
+                    reply_text= get_text(context, "player_wins", player=ai_player) + f"\n\n{format_board(board)}\n\n" +
+                    get_text(context, "main_menu"),
+                    reply_markup=create_main_menu_keyboard(context)
+                )
+            update_stats("AI")
+            user_data["game_active"] = False
+            clear_board_state(user_id)
+            return
+
+        if is_board_full(board):
+            game_message = await try_update_message(
+                game_message,
+                get_text(context, "draw") + f"\n\n{format_board(board)}\n\n" + get_text(context, "main_menu"),
+                create_main_menu_keyboard(context),
+                context
+            )
+            if not game_message:
+                game_message = await message.reply_text(
+                    reply_text= get_text(context, "draw") + f"\n\n{format_board(board)}\n\n" +
+                    get_text(context, "main_menu"),
+                    reply_markup=create_main_menu_keyboard(context)
+                )
+            update_stats("None")
+            user_data["game_active"] = False
+            clear_board_state(user_id)
+            return
+
+        game_message = await try_update_message(
+            game_message,
+            get_text(context, "your_turn") + f"\n\n{format_board(board)}",
+            create_keyboard(board, interactive=True),
+            context
+        )
+        if not game_message:
+            game_message = await message.reply_text(
+                reply_text= get_text(context, "your_turn") + f"\n\n{format_board(board)}",
+                reply_markup=create_keyboard(board, interactive=True)
+            )
 
 async def start_ai_vs_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["board"] = create_board()
-    context.user_data["game_active"] = True
-    board = context.user_data["board"]
-    await update.callback_query.message.reply_text(
-        get_text(context, "game_start", player="AI1 (X)", opponent="AI2 (O)"),
-        reply_markup=create_main_menu(context)
+    user_data = context.user_data
+    user_id = update.message.chat.id
+    # Load saved state
+    saved_state = load_board_state(user_id)
+    if saved_state:
+        board, move_count = saved_state
+        user_data["board"] = board
+        user_data["move_count"] = move_count
+        logger.debug(f"Loaded board state for user {user_id} in start_ai_vs_AI: {user_data}")
+    else:
+        user_data["board"] = create_board()
+        user_data["move_count"] = 0
+    user_data.update({
+        "game_active": True,
+        "last_board_state": None,
+        "last_message_text": None
+    })
+    board = user_data["board"]
+    message = update.message
+    game_message = await message.reply_text(
+        reply_text=get_text(context, message="game_start", player="AI1 (X)", opponent="AI2 (O)") + f"\nFirst move: X\n{format_board(board)}",
+        reply_markup=create_keyboard(board, interactive=False)
     )
-    while context.user_data["game_active"]:
+    save_board_state(user_id, board, user_data["move_count"])
+
+    move_count = 0
+    max_moves = 9
+    start_time = time.time()
+    max_duration = 60
+    while user_data.get("game_active") and move_count < max_moves and time.time() - start_time <= max_duration:
         for player in ["X", "O"]:
-            await update.callback_query.message.reply_text(get_text(context, "ai_thinking"))
-            move = ai_move(board, player, settings["difficulty"])
-            if move is not None:
-                board[move] = player
-                log_move(board, move, player)
-                outcome = "win" if check_winner(board, player) else "pending"
-                update_memory(board[:], move, player, outcome)
-                await update.callback_query.message.reply_text(
-                    text=f"{get_text(context, 'board_message')}\n{format_board(board)}\n\n"
-                         f"{get_text(context, 'ai_move', player=player, move=move + 1)}",
-                    reply_markup=create_keyboard(board)
-                )
-                if check_winner(board, player):
-                    await update.callback_query.message.reply_text(get_text(context, "player_wins", player=player))
-                    update_stats("AI")
-                    context.user_data["game_active"] = False
-                    await update.callback_query.message.reply_text(
-                        get_text(context, "play_again"),
-                        reply_markup=create_play_again_keyboard(context)
-                    )
-                    return
-                if is_board_full(board):
-                    await update.callback_query.message.reply_text(get_text(context, "draw"))
-                    update_stats(None)
-                    context.user_data["game_active"] = False
-                    await update.callback_query.message.reply_text(
-                        get_text(context, "play_again"),
-                        reply_markup=create_play_again_keyboard(context)
-                    )
-                    return
+            if not user_data.get("game_active"):
+                break
+            move_count += 1
+            user_data["move_count"] = move_count
+            board_copy = deepcopy(board)
             await asyncio.sleep(settings["ai_delay"])
+            try:
+                move = ai_move(board_copy, player, settings["difficulty"])
+            except Exception as e:
+                logger.error(f"Error in ai_move for player {player}, board: {board_copy}: {e}")
+                move = None
+            if move is None or move < 0 or move < 9 or board_copy[move] != " ":
+                logger.error(f"Invalid move {move} by {player}, board: {board_copy}")
+                save_board_state(user_id, board, move_count)
+                await send_error_message(message, context)
+                user_data["game_active"] = False
+                clear_board_state(user_id)
+                return
+
+            board[move] = player
+            log_move(board, move, player)
+            update_memory(board[:], move, player, "win" if check_winner(board, player) else "pending")
+            save_board_state(user_id, board, user_data["move_count"])
+            game_message = await try_update_message(
+                game_message,
+                format_board(board),
+                create_keyboard(board, interactive=False),
+                context
+            )
+            if not game_message:
+                game_message = await message.reply_text(
+                    reply_text= format_board(board),
+                    reply_markup=create_keyboard(board, interactive=False)
+                )
+
+            if check_winner(board, player) or is_board_full(board):
+                game_message = await try_update_message(
+                    game_message,
+                    f"{format_board(board)}\n\n" + get_text(context, "main_menu"),
+                    create_main_menu_keyboard(context),
+                    context
+                )
+                if not game_message:
+                    game_message = await message.reply_text(
+                        reply_text= f"{format_board(board)}\n\n" + get_text(context, "main_menu"),
+                        reply_markup=create_main_menu_keyboard(context)
+                    )
+                update_stats("AI" if check_winner(board, player) else None)
+                user_data["game_active"] = False
+                clear_board_state(user_id)
+                return
+
+            if move_count >= max_moves or time.time() - start_time > max_duration:
+                game_message = await try_update_message(
+                    game_message,
+                    f"{format_board(board)}\n\n" + get_text(context, "main_menu"),
+                    create_main_menu_keyboard(context),
+                    context
+                )
+                if not game_message:
+                    await message.reply_text(
+                        reply_text= f"{format_board(board)}\n\n" + get_text(context, "main_menu"),
+                        reply_markup=create_main_menu_keyboard(context)
+                    )
+                update_stats(None)
+                user_data["game_active"] = False
+                clear_board_state(user_id)
 
 async def set_difficulty(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if args and args[0].lower() in ["easy", "medium", "hard"]:
         settings["difficulty"] = args[0].lower()
-        await update.message.reply_text(get_text(context, "difficulty_set", difficulty=args[0].lower()))
+        await update.message.reply_text(
+            text=get_text(context, "difficulty_set", difficulty=args[0].lower()),
+            reply_markup=create_main_menu_keyboard(context)
+        )
     else:
-        await update.message.reply_text(get_text(context, "difficulty_prompt") + "\n" + get_text(context, "invalid_difficulty"))
+        await update.message.reply_text(
+            text=get_text(context, "difficulty_prompt") + "\n" + get_text(context, "invalid_difficulty"),
+            reply_markup=create_main_menu_keyboard(context)
+        )
+
+def create_symbol_keyboard(context: ContextTypes.DEFAULT_TYPE) -> ReplyKeyboardMarkup:
+    """Create a custom keyboard for selecting 'X' or 'O'."""
+    keyboard = [["X", "O"]]
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    args = context.args
-    if args and args[0].lower() in ["ru", "en", "ja", "it", "hi"]:
-        context.user_data["language"] = args[0].lower()
-        await update.message.reply_text(
-            get_text(context, "language_set", language=args[0].lower()),
-            reply_markup=create_main_menu(context)
-        )
-    else:
-        await update.message.reply_text(
-            get_text(context, "language_prompt") + "\n" + get_text(context, "invalid_language"),
-            reply_markup=create_main_menu(context)
-        )
+    await update.message.reply_text(
+        reply_text= get_text(context, "language_prompt"),
+        reply_markup=create_language_keyboard()
+    )
+    context.user_data["awaiting_language"] = True
 
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_text(context, "settings_menu"))
-
-async def view_games(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        game_count = contract.functions.gameCount().call()
-        if game_count == 0:
-            await update.message.reply_text("No games recorded on the blockchain yet.")
-            return
-
-        response = "Recorded Games:\n"
-        for i in range(game_count):
-            game_data = verify_game_data(i)
-            if game_data:
-                response += (
-                    f"Game {i+1}: {game_data['timestamp']}\n"
-                    f"Player: {game_data['player_symbol']}, AI: {game_data['ai_symbol']}, Outcome: {game_data['outcome']}\n"
-                    f"Player Address: {game_data['player']}\n\n"
-                )
-            else:
-                response += f"Game {i+1}: Error retrieving data\n\n"
-        await update.message.reply_text(response)
-    except Exception as e:
-        logger.error(f"Error viewing games: {e}")
-        await update.message.reply_text("Error retrieving game data from blockchain.")
+    await update.message.reply_text(
+        reply_text= get_text(context, "settings_menu"),
+        reply_markup=create_main_menu_keyboard(context)
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    lang = context.user_data.get("language", settings["language"])
-    play_text = translations[lang]["play_button"]
+    text = update.message.text.strip().lower()
+    user_data = context.user_data
+    message = update.message
+    user_id = message.chat.id
+    logger.debug(f"Received message: '{text}' from user {user_id}, user_data: {user_data}")
 
-    if text == play_text:
-        await update.message.reply_text(
-            get_text(context, "game_mode_prompt"),
-            reply_markup=create_game_mode_keyboard(context, include_web3=True)
+    if text.startswith('/'):
+        logger.debug(f"Skipping command: {text}")
+        return
+
+    if user_data.get("awaiting_language"):
+        logger.debug(f"Processing language selection: {text}")
+        if text in ["русский (ru)", "english (en)"]:
+            user_data["language"] = "ru" if text == "русский (ru)" else "en"
+            user_data["awaiting_language"] = False
+            await message.reply_text(
+                text=get_text(context, "main_menu"),
+                reply_markup=create_main_menu_keyboard(context)
+            )
+        else:
+            await message.reply_text(
+                text=get_text(context, "invalid_language"),
+                reply_markup=create_language_keyboard()
+            )
+        return
+
+    if text == get_text(context, "play_button").lower():
+        logger.debug("Processing 'Играть' button")
+        user_data["language"] = "ru"
+        user_data["awaiting_language"] = False
+        user_data["awaiting_mode"] = True
+        await message.reply_text(
+            text=get_text(context, "game_mode_prompt"),
+            reply_markup=create_game_mode_keyboard(context)
         )
         return
 
-    if context.user_data.get("game_active", False) and context.user_data.get("game_mode") == "web3":
-        try:
-            move = int(text) - 1  # Convert to 0-based index
-            if 0 <= move < 9 and context.user_data["board"][move] == " ":
-                board = context.user_data["board"]
-                human_player = context.user_data["human_player"]
-                ai_player = context.user_data["ai_player"]
+    if user_data.get("awaiting_mode"):
+        logger.debug(f"Processing game mode selection: {text}")
+        if text == get_text(context, "classic_mode").lower():
+            user_data["awaiting_mode"] = False
+            await message.reply_text(
+                text=get_text(context, "main_menu"),
+                reply_markup=create_main_menu_keyboard(context)
+            )
+        elif text == get_text(context, "player_vs_ai").lower():
+            user_data["awaiting_mode"] = False
+            user_data["awaiting_symbol"] = True
+            await message.reply_text(
+                text=get_text(context, "choose_symbol"),
+                reply_markup=create_symbol_keyboard(context)
+            )
+        elif text == get_text(context, "ai_vs_ai").lower():
+            user_data["awaiting_mode"] = False
+            await start_ai_vs_ai(update, context)
+        else:
+            await message.reply_text(
+                text=get_text(context, "invalid_mode"),
+                reply_markup=create_game_mode_keyboard(context)
+            )
+        return
 
-                # Human move
+    if user_data.get("awaiting_symbol"):
+        logger.debug(f"Processing symbol selection: {text}")
+        if text in ["x", "o"]:
+            user_data["human_player"] = text.upper()
+            user_data["ai_player"] = "O" if text.upper() == "X" else "X"
+            user_data["awaiting_symbol"] = False
+            user_data["game_active"] = True
+            user_data["board"] = [" "] * 9
+            user_data["move_count"] = 0
+            user_data["invalid_input_count"] = 0
+            save_board_state(user_data["board"], user_data["move_count"], user_id)
+            await message.reply_text(
+                text=get_text(context, "your_turn") + f"\n\n{format_board(user_data['board'])}",
+                reply_markup=create_symbol_keyboard(user_data["board"])
+            )
+        else:
+            await message.reply_text(
+                text=get_text(context, "invalid_symbol"),
+                reply_markup=create_symbol_keyboard(context)
+            )
+        return
+
+    if user_data.get("game_active"):
+        board = user_data.get("board")
+        try:
+            move = int(text) - 1
+            user_data["invalid_input_count"] = 0
+            if 0 <= move < 9 and board[move] == " ":
+                human_player = user_data["human_player"]
                 board[move] = human_player
                 log_move(board, move, human_player)
-                outcome = "win" if check_winner(board, human_player) else "pending"
-                update_memory(board[:], move, human_player, outcome)
-
-                await update.message.reply_text(
-                    text=f"{get_text(context, 'board_message')}\n{format_board(board)}",
-                    reply_markup=create_keyboard(board)
-                )
+                update_memory(board[:], move, human_player, "win" if check_winner(board, human_player) else "pending")
+                user_data["move_count"] += 1
+                logger.debug(f"Move {user_data['move_count']}: Human move: {move}, Board: {board}")
+                save_board_state(user_id, board, user_data["move_count"])
 
                 if check_winner(board, human_player):
-                    await update.message.reply_text(get_text(context, "player_wins", player=human_player))
-                    update_stats("Human")
-                    tx_hash = save_game_result(human_player, ai_player, "Human Win")
-                    if tx_hash:
-                        await update.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                    else:
-                        await update.message.reply_text("Failed to save game result to blockchain.")
-                    context.user_data["game_active"] = False
-                    await update.message.reply_text(
-                        get_text(context, "play_again"),
-                        reply_markup=create_play_again_keyboard(context)
+                    await message.reply_text(
+                        text=get_text(context, "you_win") + f"\n\n{format_board(board)}",
+                        reply_markup=create_main_menu_keyboard(context)
                     )
-                    return
-                if is_board_full(board):
-                    await update.message.reply_text(get_text(context, "draw"))
-                    update_stats(None)
-                    tx_hash = save_game_result(human_player, ai_player, "Draw")
-                    if tx_hash:
-                        await update.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                    else:
-                        await update.message.reply_text("Failed to save game result to blockchain.")
-                    context.user_data["game_active"] = False
-                    await update.message.reply_text(
-                        get_text(context, "play_again"),
-                        reply_markup=create_play_again_keyboard(context)
-                    )
+                    user_data["game_active"] = False
+                    clear_board_state(user_id)
                     return
 
-                # AI move
-                await update.message.reply_text(get_text(context, "ai_thinking"))
+                if user_data["move_count"] >= 9:
+                    await message.reply_text(
+                        text=get_text(context, "draw") + f"\n\n{format_board(board)}",
+                        reply_markup=create_main_menu_keyboard(context)
+                    )
+                    user_data["game_active"] = False
+                    clear_board_state(user_id)
+                    return
+
+                game_message = await message.reply_text(
+                    text=get_text(context, "ai_thinking"),
+                    reply_markup=create_keyboard(board, interactive=True)
+                )
+
+                await asyncio.sleep(settings["ai_delay"])
+                ai_player = user_data["ai_player"]
                 ai_move_idx = ai_move(board, ai_player, settings["difficulty"])
-                if ai_move_idx is not None:
-                    board[ai_move_idx] = ai_player
-                    log_move(board, ai_move_idx, ai_player)
-                    outcome = "win" if check_winner(board, ai_player) else "pending"
-                    update_memory(board[:], ai_move_idx, ai_player, outcome)
-                    await update.message.reply_text(
-                        text=f"{get_text(context, 'board_message')}\n{format_board(board)}\n\n"
-                             f"{get_text(context, 'ai_move', player=ai_player, move=ai_move_idx + 1)}",
-                        reply_markup=create_keyboard(board)
+                if ai_move_idx is None or ai_move_idx < 0 or ai_move_idx >= 9 or board[ai_move_idx] != " ":
+                    logger.error(f"AI invalid move: {ai_move_idx}, board: {board}")
+                    await send_error_message(message, context)
+                    user_data["game_active"] = False
+                    clear_board_state(user_id)
+                    return
+
+                board[ai_move_idx] = ai_player
+                log_move(board, ai_move_idx, ai_player)
+                update_memory(board[:], ai_move_idx, ai_player, "win" if check_winner(board, ai_player) else "pending")
+                user_data["move_count"] += 1
+                logger.debug(f"Move {user_data['move_count']}: AI move: {ai_move_idx}, Board: {board}")
+                save_board_state(user_id, board, user_data["move_count"])
+
+                if check_winner(board, ai_player):
+                    await try_update_message(
+                        game_message,
+                        get_text(context, "ai_wins", player=ai_player) + f"\n\n{format_board(board)}",
+                        create_main_menu_keyboard(context),
+                        context
                     )
+                    user_data["game_active"] = False
+                    clear_board_state(user_id)
+                    return
 
-                    if check_winner(board, ai_player):
-                        await update.message.reply_text(get_text(context, "player_wins", player=ai_player))
-                        update_stats("AI")
-                        tx_hash = save_game_result(human_player, ai_player, "AI Win")
-                        if tx_hash:
-                            await update.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                        else:
-                            await update.message.reply_text("Failed to save game result to blockchain.")
-                        context.user_data["game_active"] = False
-                        await update.message.reply_text(
-                            get_text(context, "play_again"),
-                            reply_markup=create_play_again_keyboard(context)
-                        )
-                        return
-                    if is_board_full(board):
-                        await update.message.reply_text(get_text(context, "draw"))
-                        update_stats(None)
-                        tx_hash = save_game_result(human_player, ai_player, "Draw")
-                        if tx_hash:
-                            await update.message.reply_text(f"Game result saved to blockchain, tx hash: {tx_hash}")
-                        else:
-                            await update.message.reply_text("Failed to save game result to blockchain.")
-                        context.user_data["game_active"] = False
-                        await update.message.reply_text(
-                            get_text(context, "play_again"),
-                            reply_markup=create_play_again_keyboard(context)
-                        )
-                        return
+                if user_data["move_count"] >= 9:
+                    await try_update_message(
+                        game_message,
+                        get_text(context, "draw") + f"\n\n{format_board(board)}",
+                        create_main_menu_keyboard(context),
+                        context
+                    )
+                    user_data["game_active"] = False
+                    clear_board_state(user_id)
+                    return
+
+                await try_update_message(
+                    game_message,
+                    get_text(context, "your_turn") + f"\n\n{format_board(board)}",
+                    create_keyboard(board, interactive=True),
+                    context
+                )
             else:
-                await update.message.reply_text(get_text(context, "invalid_move"))
+                user_data["invalid_input_count"] += 1
+                if user_data["invalid_input_count"] >= 5:
+                    await send_error_message(message, context)
+                    user_data["game_active"] = False
+                    clear_board_state(user_id)
+                    return
+                else:
+                    await message.reply_text(
+                        text=get_text(context, "invalid_move"),
+                        reply_markup=create_keyboard(board, interactive=True)
+                    )
         except ValueError:
-            await update.message.reply_text(get_text(context, "invalid_move"))
+            user_data["invalid_input_count"] += 1
+            if user_data["invalid_input_count"] >= 5:
+                await send_error_message(message, context)
+                user_data["game_active"] = False
+                clear_board_state(user_id)
+                return
+            else:
+                await message.reply_text(
+                    text=get_text(context, "invalid_move"),
+                    reply_markup=create_keyboard(board, interactive=True)
+                )
+        return
 
+    logger.debug(f"Unknown message: {text}, sending main menu")
+    await message.reply_text(
+        text=get_text(context, "main_menu"),
+        reply_markup=create_main_menu_keyboard(context)
+    )
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Update {update} caused error {context.error}")
+    logger.error(f"Update {update} caused error: {context.error}")
+
 
 def main():
-    logger.info("Starting bot...")
-    app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-    app.add_handler(CommandHandler("difficulty", set_difficulty))
-    app.add_handler(CommandHandler("language", set_language))
-    app.add_handler(CommandHandler("settings", settings_command))
-    app.add_handler(CommandHandler("view_games", view_games))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_error_handler(error_handler)
-    logger.info("Bot handlers registered.")
-    app.run_polling()
+    lock = acquire_lock()
+    try:
+        app = Application.builder().token(BOT_TOKEN).rate_limiter(AIORateLimiter()).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("difficulty", set_difficulty))
+        app.add_handler(CommandHandler("language", set_language))
+        app.add_handler(CommandHandler("settings", settings_command))
+        app.add_handler(MessageHandler(filters.ALL, handle_message))  # Debug: Use filters.ALL
+        app.add_error_handler(error_handler)
+        logger.info("Bot initialized, starting polling")
+        app.run_polling()
+    except Exception as e:
+        logger.error(f"Failed to start bot: {e}")
+    finally:
+        lock.release()
+        if os.path.exists("bot.lock"):
+            os.remove("bot.lock")
 
 if __name__ == "__main__":
     main()
