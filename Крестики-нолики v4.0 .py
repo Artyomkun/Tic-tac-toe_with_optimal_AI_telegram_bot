@@ -128,7 +128,6 @@ translations = {
         "info_button": "Info",
         "feature_coming_soon": "Feature coming soon",
         "choose_symbol": "Choose your symbol: X or O",
-        "invalid_symbol": "Invalid symbol. Please choose X or O."
     },
     "ja": {
         "main_menu": "メインメニュー",
@@ -252,18 +251,20 @@ def create_language_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard)
 
-def create_game_mode_keyboard(context: ContextTypes.DEFAULT_TYPE):
+def create_game_mode_keyboard(context: ContextTypes.DEFAULT_TYPE) -> ReplyKeyboardMarkup:
+    logger.debug("Creating game mode keyboard")
     keyboard = [
         [get_text(context, "classic_mode")],
         [get_text(context, "player_vs_ai")],
         [get_text(context, "ai_vs_player")],
         [get_text(context, "ai_vs_ai")]
     ]
+    logger.debug(f"Game mode keyboard created: {keyboard}")
     return ReplyKeyboardMarkup(
         keyboard,
         resize_keyboard=True,
         one_time_keyboard=True,
-        input_field_keyboard=get_text(context, "game_mode_prompt")
+        input_field_placeholder=get_text(context, "game_mode_prompt")
     )
 
 def check_winner(board: list, player: str) -> bool:
@@ -730,7 +731,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text=get_text(context, "game_mode_prompt"),
             reply_markup=create_game_mode_keyboard(context)
         )
-        return
 
     if user_data.get("awaiting_mode"):
         logger.debug(f"Processing game mode selection: {text}")
