@@ -440,7 +440,7 @@ def ai_move(board: list, player: str, difficulty: str = None) -> int | None:
         return None
 
     difficulty = difficulty or settings["difficulty"]
-    
+
     if difficulty == "easy":
         move = random.choice(available_moves)
     elif difficulty == "medium":
@@ -635,7 +635,7 @@ def load_user_settings(user_id: int) -> str | None:
 async def start_classic_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data = context.user_data
     user_id = update.message.chat.id
-    
+
     # Загружаем сохранённое состояние игры, если оно есть
     saved_state = load_board_state(user_id)
     if saved_state:
@@ -646,7 +646,7 @@ async def start_classic_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         user_data["board"] = create_board()
         user_data["move_count"] = 0
-    
+
     # Устанавливаем начальные параметры игры
     user_data.update({
         "game_active": True,
@@ -657,18 +657,18 @@ async def start_classic_game(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "player2_symbol": user_data.get("player2_symbol", "O"),
         "invalid_input_count": 0
     })
-    
+
     board = user_data["board"]
     message = update.message
     current_player = user_data["player1_symbol"] if user_data["move_count"] % 2 == 0 else user_data["player2_symbol"]
-    
+
     # Отправляем начальное сообщение с игровым полем
     game_message = await message.reply_text(
         text=get_text(context, "game_start", player=f"Player 1 ({user_data['player1_symbol']})", opponent=f"Player 2 ({user_data['player2_symbol']})") +
              f"\nCurrent turn: {current_player}\n\n{format_board(board)}",
         reply_markup=create_keyboard(board, interactive=True)
     )
-    
+
     # Сохраняем начальное состояние доски
     save_board_state(user_id, board, user_data["move_count"])
     await asyncio.sleep(1.5)
@@ -1036,11 +1036,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_data["awaiting_difficulty"] = False
                 user_data["awaiting_symbol"] = True  # Теперь ожидаем выбор символа
                 logger.debug(f"Difficulty set to {text} for user {user_id}, awaiting symbol")
-                
+
                 # Создаем новую доску перед началом игры
                 user_data["board"] = create_board()
                 user_data["move_count"] = 0
-                
+
                 await message.reply_text(
                     text=get_text(context, "choose_symbol"),
                     reply_markup=create_symbol_keyboard(context)
